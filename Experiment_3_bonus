@@ -1,0 +1,114 @@
+library(lmtest)
+library(mvtnorm)
+library(randomForest)
+library(SuperLearner)
+library(sandwich)
+library(clusterGeneration)
+library(np)
+library(xtable)
+library(glmnet)
+library(ranger)
+library(gam)
+library(polspline)
+library(grf)
+library(KernelKnn)
+library(hdm)
+
+rm(list=ls())
+
+source("dri_functions.R")
+
+run.sim.SP <- function(N,nsim,seed,sigma,c_gamma,c_beta){
+  
+  thetahat=matrix(NA,nrow=nsim,27)
+  
+  for(i in 1:nsim){#i=1
+    set.seed(i*seed)
+    p<-200  
+    seq_num<-0.5^c(0:(p-1))
+    tp<-toeplitz(seq_num)
+    l <- rmvnorm(n=N, mean=rep(0,p),sigma=tp)
+    gamma<-c_gamma*(1/c(1:p))^2
+    #gamma[101:200]<-rep(0,100)
+    beta<-c_beta*(1/c(1:p))^2
+    #beta[101:200]<-rep(0,100)
+    a<-rnorm(N,l%*%gamma,1)
+    y<-rnorm(N,l%*%beta,1)
+    
+    nsplits <- 5
+    s <- sample(rep(1:nsplits,ceiling(N/nsplits))[1:N])
+    G_lm<-rep(NA,N)
+    #lambda_init_G=lambda_select(y=a,cov=l)
+    for (vfold in 1:nsplits){
+      train <- s!=vfold; test <- s==vfold
+      if (nsplits==1){ train <- test }
+      modela_lm<-rlasso(a[train]~l[train,])
+      G_lm[test]=predict(modela_lm,l[test,])
+      #modela_lm=glmnet(l[train,],a[train],alpha=1,lambda=lambda_init_G,family="gaussian")
+      #G_lm[test]=predict(modela_lm,l[test,],type="response")
+    }
+    M_lm<-rep(NA,N)
+    #lambda_init_M=lambda_select(y=y,cov=cbind(a,l))
+    for (vfold in 1:nsplits){
+      train <- s!=vfold; test <- s==vfold
+      if (nsplits==1){ train <- test }
+      modely_lm<-rlasso(y[train]~l[train,])
+      M_lm[test]=predict(modely_lm,l[test,])
+      # modely_lm=glmnet(cbind(a[train],l[train,]),y[train],alpha=1,lambda=lambda_init_M)
+      # M_lm[test]=predict(modely_lm,cbind(rep(0,table(test)[2]),l[test,]),type="response")
+    }
+    
+    tau_G<-0.1
+    #tau_M<-0.1
+    G_slow<-G_lm-rnorm(N,mean=3*(1/((N)^tau_G)),sd=1/((N)^tau_G))
+    #M_slow<-l%*%beta-rnorm(N,mean=3*(1/(N)^tau_M),sd=1/((N)^tau_M))
+    G_true<-l%*%gamma;M_true<-l%*%beta 
+    
+    dml_est=dml_cross.est(N=N,y=y,a=a,G=G_true,M=M_true)
+    thetahat[i,1]<-dml_est
+    rdml_est=rdml_cross.est(N=N,y=y,a=a,nsplits=nsplits,s=s,G=G_lm,M=M_lm)
+    thetahat[i,2]<-rdml_est
+    
+    
+    # #Misspecification
+    G_m1<-rep(NA,N)
+    l_red<-l[,10:p]
+    #lambda_init_G=lambda_select(y=a,cov=l_red)
+    for (vfold in 1:nsplits){
+      train <- s!=vfold; test <- s==vfold
+      if (nsplits==1){ train <- test }
+      modela_lm<-rlasso(a[train]~l_red[train,])
+      G_m1[test]=predict(modela_lm,l_red[test,])
+      #modela_lm=glmnet(l_red[train,],a[train],alpha=1,lambda=lambda_init_M)
+      #G_m1[test]=predict(modela_lm,l_red[test,],type="response")
+    }
+    dml_est=dml_cross.est(N=N,y=y,a=a,G=G_m1,M=M_lm)
+    thetahat[i,3]<-dml_est
+    rdml_est=rdml_cross.est(N=N,y=y,a=a,nsplits=nsplits,s=s,G=G_m1,M=M_lm)
+    thetahat[i,4]<-rdml_est
+    
+    G_m2<-rep(mean(a),N)
+    dml_est=dml_cross.est(N=N,y=y,a=a,G=G_m2,M=M_lm)
+    thetahat[i,5]<-dml_est
+    rdml_est=rdml_cross.est(N=N,y=y,a=a,nsplits=nsplits,s=s,G=G_m2,M=M_lm)
+    thetahat[i,6]<-rdml_est
+    
+    cat(i,round(c(n*var(thetahat[1:i,1]),n*var(thetahat[1:i,2]),
+                  n*var(thetahat[1:i,3]),n*var(thetahat[1:i,4]),
+                  n*var(thetahat[1:i,5]),n*var(thetahat[1:i,6])),digits=3),"\n")
+    
+  }
+  return(thetahat)
+}
+
+sim1000a_SP<-run.sim.SP(N=1000,nsim=1000,seed=53,c_gamma=0.82,c_beta=0.82)
+
+var(sim1000a_SP[,2])/var(sim1000a_SP[,1])
+var(sim1000a_SP[,3])/var(sim1000a_SP[,1])
+var(sim1000a_SP[,4])/var(sim1000a_SP[,1])
+var(sim1000a_SP[,5])/var(sim1000a_SP[,1])
+var(sim1000a_SP[,6])/var(sim1000a_SP[,1])
+
+
+
+
